@@ -30,6 +30,7 @@ public class ProxyExecutorService implements InvocationHandler {
         poolInfo.setPoolName(poolName);
         poolInfo.setCreateStack(createStack);
         poolInfo.setCreateThreadId(Thread.currentThread().getId());
+        poolInfo.setPoolObj(executor);
         ThreadInfoManager.getINSTANCE().putThreadPoolInfo(poolName, poolInfo);
     }
 

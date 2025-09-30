@@ -46,6 +46,7 @@ open class TBaseScheduledThreadPoolExecutor : ScheduledThreadPoolExecutor {
         poolInfo.poolName = poolName
         poolInfo.createStack = createStack
         poolInfo.createThreadId = Thread.currentThread().id
+        poolInfo.poolObj = this
         ThreadInfoManager.INSTANCE.putThreadPoolInfo(poolName, poolInfo)
     }
 

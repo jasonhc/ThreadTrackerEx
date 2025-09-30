@@ -1,8 +1,7 @@
 package com.codoon.threadtracker.proxy
 
 import com.codoon.threadtracker.ThreadInfoManager.Companion.INSTANCE
-import com.codoon.threadtracker.TrackerUtils.getStackString
-import com.codoon.threadtracker.TrackerUtils.toObjectString
+import com.codoon.threadtracker.TrackerUtils
 import com.codoon.threadtracker.bean.ThreadPoolInfo
 import java.util.concurrent.*
 
@@ -15,19 +14,20 @@ import java.util.concurrent.*
 open class ProxyThreadPoolExecutor(private val real: ThreadPoolExecutor) :
     ThreadPoolExecutor(1, 1, 1, TimeUnit.SECONDS, LinkedBlockingDeque<Runnable>()) {
 
-    private val poolName = toObjectString(real)
+    private val poolName = TrackerUtils.toObjectString(real)
 
     init {
-        val createStack = getStackString(false)
+        val createStack = TrackerUtils.getStackString(false)
         val poolInfo = ThreadPoolInfo()
         poolInfo.poolName = poolName
         poolInfo.createStack = createStack
         poolInfo.createThreadId = Thread.currentThread().id
+        poolInfo.poolObj = real
         INSTANCE.putThreadPoolInfo(poolName, poolInfo)
     }
 
     override fun execute(command: Runnable) {
-        val callStack = getStackString(true)
+        val callStack = TrackerUtils.getStackString(true)
 
         // 处理外部直接使用AsyncTask.THREAD_POOL_EXECUTOR.execute的情况，
         // 因AsyncTask中sDefaultExecutor把PoolRunnableAndOther又包装成Runnable提交到THREAD_POOL_EXECUTOR

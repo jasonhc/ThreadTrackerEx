@@ -2,6 +2,7 @@ package com.codoon.threadtracker.proxy
 
 import com.codoon.threadtracker.ThreadInfoManager
 import com.codoon.threadtracker.bean.ThreadInfo
+import com.codoon.threadtracker.bean.ThreadType
 import java.util.concurrent.Callable
 
 /**
@@ -16,37 +17,37 @@ class PoolRunnableAndOther constructor(
     private val callThreadId = Thread.currentThread().id
 
     override fun run() {
-        val info = updateThreadInfo()
+        val thread = Thread.currentThread()
+        val info = updateThreadInfo(thread)
+
         (any as Runnable).run()
+
         // 任务已执行结束，callStack表示任务添加栈，此时应为空代表线程当前无任务在运行
         info.callStack = ""
+        ThreadInfoManager.INSTANCE.recordThreadEndTime(thread, ThreadType.POOL_TASK)
     }
 
     override fun call(): Any {
-        val info = updateThreadInfo()
+        val thread = Thread.currentThread()
+        val info = updateThreadInfo(thread)
+
         val v = (any as Callable<Any>).call()
+
         info.callStack = ""
+        ThreadInfoManager.INSTANCE.recordThreadEndTime(thread, ThreadType.POOL_TASK)
         return v
     }
 
-    private fun updateThreadInfo(): ThreadInfo {
-        val thread = Thread.currentThread()
-        var info = ThreadInfoManager.INSTANCE.getThreadInfoById(thread.id)
-
-        // 有就更新没有就新建
-        info = (info ?: ThreadInfo()).apply {
-            id = thread.id
-            name = thread.name
-            state = thread.state
-            // 对应info不为空情况，可能事先已在threadFactory中建立过线程-线程池关联，以此为准
-            // 比如AsyncTask场景，具体参见ProxyAsyncTaskExecutor
-            poolName = poolName ?: this@PoolRunnableAndOther.poolName
-            callStack = this@PoolRunnableAndOther.callStack
-            callThreadId = this@PoolRunnableAndOther.callThreadId
-        }
-        // 更新或添加
-        ThreadInfoManager.INSTANCE.putThreadInfo(thread.id, info)
-        return info
+    private fun updateThreadInfo(thread: Thread): ThreadInfo {
+        val threadInfo = ThreadInfoManager.INSTANCE.recordThreadInfo(
+            thread,
+            ThreadType.POOL_TASK,
+            callStack,
+            callThreadId,
+            poolName
+        )
+        ThreadInfoManager.INSTANCE.recordThreadHistoryInfo(threadInfo)
+        return threadInfo
     }
 
     override fun compareTo(other: Any): Int {

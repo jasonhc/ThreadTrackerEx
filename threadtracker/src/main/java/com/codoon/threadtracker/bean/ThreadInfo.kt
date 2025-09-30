@@ -1,5 +1,7 @@
 package com.codoon.threadtracker.bean
 
+import com.codoon.threadtracker.TrackerUtils
+
 /**
  * 线程信息
  * todo 考虑新增类型字段，比如属于Timer还是HandlerThread还是其他什么的
@@ -7,6 +9,7 @@ package com.codoon.threadtracker.bean
 data class ThreadInfo(
     var id: Long = -1L,
     var name: String = "",
+    var type: ThreadType = ThreadType.NORMAL,
     var state: Thread.State = Thread.State.TERMINATED,
     var callStack: String = "", // 如果是单个线程，则是start被调用堆栈，如果是线程池中线程，此字段意义为当前正在执行的task被添加的栈。因task执行完马上被置空，后续可以考虑记录最近一次任务的添加栈信息
     var callThreadId: Long = -1L, // 被调用/添加时所处线程id，方便查看调用链
@@ -20,4 +23,15 @@ data class ThreadInfo(
         const val HIT_NO = 1
         const val HIT_YES = 2
     }
+
+    fun fullDump() : String {
+        return "ThreadInfo { id: $id, name: $name, state: $state, callThreadId: $callThreadId, poolName: $poolName, startTime: $startTime, hit: $hit\n" +
+                "  * callStack: \n${TrackerUtils.addIndentSpace(callStack)}" +
+                "  * runningStack: \n${TrackerUtils.addIndentSpace(runningStack)}}"
+    }
+
+    fun dump() : String {
+        return "ThreadInfo { id: $id, name: $name, state: $state, callThreadId: $callThreadId, poolName: $poolName, startTime: $startTime, hit: $hit"
+    }
+
 }

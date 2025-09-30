@@ -1,11 +1,17 @@
 package com.codoon.threadtracker
 
+import android.content.Context
 import android.util.Log
 import com.codoon.threadtracker.bean.ShowInfo
+import com.codoon.threadtracker.bean.ThreadHistoryInfo
 import com.codoon.threadtracker.bean.ThreadInfo
 import com.codoon.threadtracker.bean.ThreadInfoResult
 import com.codoon.threadtracker.bean.ThreadPoolInfo
-import java.util.concurrent.ConcurrentHashMap
+import com.codoon.threadtracker.bean.ThreadType
+import java.io.File
+import java.util.*
+
+private const val TAG = "ThreadInfoManager"
 
 class ThreadInfoManager private constructor() {
 
@@ -15,21 +21,102 @@ class ThreadInfoManager private constructor() {
     }
 
     // 随时在更新
-    private val threadInfo = ConcurrentHashMap<Long, ThreadInfo>()
-    private val threadPoolInfo = ConcurrentHashMap<String, ThreadPoolInfo>()
+    private val threadInfo = HashMap<Long, ThreadInfo>()
+    private val threadPoolInfo = HashMap<String, ThreadPoolInfo>()
+
+    // 线程历史记录
+    private val threadHistory = ArrayList<ThreadHistoryInfo>()
 
     // 用于展示页面获取细节，只在buildAllThreadInfo时更新
     private val lastThreadInfo = HashMap<Long, ThreadInfo>()
     private val lastThreadPoolInfo = HashMap<String, ThreadPoolInfo>()
 
+    @Synchronized
+    fun recordThread(thread: Thread, type: ThreadType, callStack: String) {
+        // TODO: 2025/4/16 为了判断旧的逻辑是否有用而添加的log
+        val info = getThreadInfoById(thread.id)
+        info?.also {
+            if (it.callStack.isNotEmpty()) { // 如果来自线程池，callStack意义为任务添加栈，可能已经有值了，不能更新为start调用栈
+                Log.w(TAG,
+                    "HCDBG, 如果来自线程池，callStack意义为任务添加栈，可能已经有值了，不能更新为start调用栈, thread id: ${thread.id}, name: ${thread.name}, callStack: ${TrackerUtils.getStackString()}")
+            }
+        }
+
+        val threadInfo = recordThreadInfo(
+            thread,
+            type,
+            callStack,
+//            TrackerUtils.getStackString(),
+            Thread.currentThread().id
+        )
+        recordThreadHistoryInfo(threadInfo)
+    }
+
+    @Synchronized
+    fun recordThreadInfo(
+        thread: Thread, type: ThreadType, callStack: String = "", callThreadId: Long = 0, poolName: String? = null
+    ) : ThreadInfo {
+        var info = threadInfo[thread.id]
+        info = (info ?: ThreadInfo()).apply {
+            id = thread.id
+            name = thread.name
+            state = thread.state
+            this.type = type
+            this.callStack = callStack
+            this.poolName = poolName
+            this.callThreadId = callThreadId
+            startTime = System.currentTimeMillis()
+        }
+        putThreadInfo(thread.id, info)
+
+        return info
+    }
+
+    @Synchronized
     fun putThreadInfo(threadId: Long, info: ThreadInfo) {
         threadInfo[threadId] = info
     }
 
+    @Synchronized
+    fun recordThreadHistoryInfo(info: ThreadInfo) {
+        threadHistory.add(ThreadHistoryInfo.fromThreadInfo(info))
+    }
+
+    @Synchronized
+    fun recordThreadEnd(thread: Thread, threadType: ThreadType) {
+        recordThreadEndTime(thread, threadType)
+        removeThreadInfo(thread.id)
+    }
+
+    @Synchronized
+    fun recordThreadEndTime(thread: Thread, threadType: ThreadType) {
+        val threadId = thread.id
+        val threadNum = threadHistory.size
+        var found = false
+
+        for (i in threadNum-1 downTo 0) {
+            if (threadHistory[i].id == threadId && threadHistory[i].type == threadType) {
+                if (threadHistory[i].endTime == -1L) {
+                    threadHistory[i].endTime = System.currentTimeMillis()
+                } else {
+                    Log.w(TAG, "recordThreadEndTime: thread $threadId already has endTime")
+                }
+                found = true
+                break
+            }
+        }
+
+        if (!found) {
+            Log.w(TAG, "recordThreadEndTime: thread $threadId not found in thread history")
+        }
+    }
+
+    @Synchronized
     fun removeThreadInfo(threadId: Long) {
         threadInfo.remove(threadId)
     }
 
+    @Synchronized
     fun getThreadInfoById(threadId: Long): ThreadInfo? {
         return threadInfo[threadId]
     }
@@ -56,12 +143,13 @@ class ThreadInfoManager private constructor() {
     }
 
     // 获取当前所有线程并和已保存线程信息比较、融合，返回用于展示的结果
+    @Synchronized
     fun buildAllThreadInfo(log: Boolean = false): ThreadInfoResult {
 
         // 暂时规定必须在TrackerActivity刷新线程中
-        if (Thread.currentThread().name != "ThreadTracker-Refresh") {
-            throw RuntimeException("not in ThreadTracker-Refresh thread")
-        }
+//        if (Thread.currentThread().name != "ThreadTracker-Refresh") {
+//            throw RuntimeException("not in ThreadTracker-Refresh thread")
+//        }
         val ignoreId = Thread.currentThread().id
 
         val threadInfoResult = ThreadInfoResult()
@@ -184,22 +272,164 @@ class ThreadInfoManager private constructor() {
     }
 
     private fun print() {
-        Log.d(LOG_TAG, "\n\n—————————————————thread———————————————")
-        val keys = threadInfo.keys()
-        while (keys.hasMoreElements()) {
-            threadInfo[keys.nextElement()]?.apply {
-                Log.d(LOG_TAG, "${toString()}\n")
+//        Log.d(LOG_TAG, "\n\n—————————————————thread———————————————")
+//        val keys = threadInfo.keys()
+//        while (keys.hasMoreElements()) {
+//            threadInfo[keys.nextElement()]?.apply {
+//                Log.d(LOG_TAG, "${toString()}\n")
+//            }
+//        }
+//
+//        Log.d(LOG_TAG, "\n\n—————————————————pool—————————————————")
+//        val poolKeys = threadPoolInfo.keys()
+//        while (poolKeys.hasMoreElements()) {
+//            threadPoolInfo[poolKeys.nextElement()]?.apply {
+//                if (threadIds.isNotEmpty()) {
+//                    Log.d(LOG_TAG, "${toString()}\n")
+//                }
+//            }
+//        }
+    }
+
+    @Synchronized
+    fun dumpThreadHistoryInfo(context: Context) {
+        val allThreadInfo = buildAllThreadInfo()
+
+        val dumpFile = getNextDumpFile(context)
+
+        dumpFile.writeText("\n\n—————————————————thread history———————————————  total number: ${threadHistory.size}\n")
+        threadHistory.forEach {
+            dumpFile.appendText("# ${it.dump()}\n")
+        }
+        dumpFile.appendText("\n\n—————————————————thread history (with stack)———————————————  total number: ${threadHistory.size}\n")
+        threadHistory.forEach {
+            dumpFile.appendText("# ${it.fullDump()}\n")
+        }
+
+        // 把threadInfo列表按照id排序，方便查看
+        val allSortedThreadInfo = ArrayList<ThreadInfo>(threadInfo.values)
+        Collections.sort(allSortedThreadInfo, object : Comparator<ThreadInfo> {
+            override fun compare(o1: ThreadInfo?, o2: ThreadInfo?): Int {
+                if (o1 == null || o2 == null) {
+                    return 0
+                }
+                return (o1.id - o2.id).toInt()
+            }
+        })
+        dumpFile.appendText("\n\n—————————————————current threads———————————————  total number: ${allSortedThreadInfo.size}\n")
+        allSortedThreadInfo.forEach {
+            dumpFile.appendText("# ${it.dump()}\n")
+        }
+        dumpFile.appendText("\n\n—————————————————current threads (with stack)———————————————  total number: ${allSortedThreadInfo.size}\n")
+        allSortedThreadInfo.forEach {
+            dumpFile.appendText("# ${it.fullDump()}\n")
+        }
+
+        dumpFile.appendText("\n\n—————————————————pool————————————————— total number: ${threadPoolInfo.size}\n")
+        threadPoolInfo.values.forEach {
+            if (it.threadIds.isNotEmpty()) {
+                dumpFile.appendText("# ${it.dump()}\n")
             }
         }
 
-        Log.d(LOG_TAG, "\n\n—————————————————pool—————————————————")
-        val poolKeys = threadPoolInfo.keys()
-        while (poolKeys.hasMoreElements()) {
-            threadPoolInfo[poolKeys.nextElement()]?.apply {
-                if (threadIds.isNotEmpty()) {
-                    Log.d(LOG_TAG, "${toString()}\n")
+        dumpFile.appendText("\n\n—————————————————pool (no threads) ————————————————— total number: ${threadPoolInfo.size}\n")
+        threadPoolInfo.values.forEach {
+            if (it.threadIds.isEmpty()) {
+                dumpFile.appendText("# ${it.dump()}\n")
+            }
+        }
+
+        toMarkdownFile(dumpFile).writeText(dumpThreadPoolInfoMarkDown())
+    }
+
+    private fun dumpThreadPoolInfoMarkDown() : String {
+        val info = StringBuilder()
+
+        info.append("## —————————————————thread pool———————————————  total number: ${threadPoolInfo.size}\n")
+        threadPoolInfo.values.forEach {
+            if (it.threadIds.isNotEmpty()) {
+                info.append(TrackerUtils.text2MarkdownListItem(it.fullDumpForMarkDown()))
+
+                it.threadIds.forEach { id ->
+                    info.append(dumpThreadHistoryInfoMarkDown(id))
                 }
             }
         }
+
+        info.append("## —————————————————thread pool (no threads) ————————————————— total number: ${threadPoolInfo.size}\n")
+        threadPoolInfo.values.forEach {
+            if (it.threadIds.isEmpty()) {
+                info.append(TrackerUtils.text2MarkdownListItem(it.fullDumpForMarkDown()))
+            }
+        }
+
+        return info.toString()
+    }
+
+    private fun dumpThreadHistoryInfoMarkDown(threadId: Long) : String {
+        val info = StringBuilder()
+
+        threadHistory.filter { it.id == threadId }.forEach {
+            info.append(TrackerUtils.text2MarkdownListItem(it.fullDumpForMarkDown(), 2))
+        }
+
+        return info.toString()
+    }
+
+    fun dumpThreadInfo(context: Context) {
+        val allThreadInfo = buildAllThreadInfo()
+
+        val dumpFile = getNextDumpFile(context)
+
+        // 把threadInfo列表按照id排序，方便查看
+        val allSortedThreadInfo = ArrayList<ThreadInfo>(threadInfo.values)
+        Collections.sort(allSortedThreadInfo, object : Comparator<ThreadInfo> {
+            override fun compare(o1: ThreadInfo?, o2: ThreadInfo?): Int {
+                if (o1 == null || o2 == null) {
+                    return 0
+                }
+                return (o1.id - o2.id).toInt()
+            }
+        })
+        dumpFile.writeText("\n\n—————————————————thread———————————————  total number: ${allThreadInfo.totalNum}\n")
+        allSortedThreadInfo.forEach {
+            dumpFile.appendText("# ${it.dump()}\n")
+        }
+        dumpFile.appendText("\n\n—————————————————thread (with stack)———————————————  total number: ${allThreadInfo.totalNum}\n")
+        allSortedThreadInfo.forEach {
+            dumpFile.appendText("# ${it.fullDump()}\n")
+        }
+
+        dumpFile.appendText("\n\n—————————————————pool————————————————— total number: ${threadPoolInfo.size}\n")
+        threadPoolInfo.values.forEach {
+            if (it.threadIds.isNotEmpty()) {
+                dumpFile.appendText("# ${it.dump()}\n")
+            }
+        }
+
+        dumpFile.appendText("\n\n—————————————————pool (no threads) ————————————————— total number: ${threadPoolInfo.size}\n")
+        threadPoolInfo.values.forEach {
+            if (it.threadIds.isEmpty()) {
+                dumpFile.appendText("# ${it.dump()}\n")
+            }
+        }
+    }
+
+    private fun getNextDumpFile(context: Context) : File {
+        // 首先尝试thread_dump_1.txt, 如果已存在, 再尝试thread_dump_2.txt, 以此类推
+        var dumpFile : File
+        var index = 1
+        do {
+            dumpFile = File(context.filesDir.absolutePath, "/thread_dump_${index}.txt")
+            index++
+        } while (dumpFile.exists())
+
+        return dumpFile
+    }
+
+    // 根据thread_dump_x.txt文件的名字生成Markdown文件名thread_dump_x.md
+    private fun toMarkdownFile(textFile: File) : File {
+        val fileName = textFile.nameWithoutExtension
+        return File(textFile.parent, "$fileName.md")
     }
 }

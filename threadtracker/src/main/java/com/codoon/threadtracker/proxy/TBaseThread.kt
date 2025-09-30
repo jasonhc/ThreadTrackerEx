@@ -1,9 +1,8 @@
 package com.codoon.threadtracker.proxy
 
-import android.os.SystemClock
 import com.codoon.threadtracker.ThreadInfoManager
-import com.codoon.threadtracker.TrackerUtils.getStackString
-import com.codoon.threadtracker.bean.ThreadInfo
+import com.codoon.threadtracker.TrackerUtils
+import com.codoon.threadtracker.bean.ThreadType
 
 /**
  * 如果有人自定义Thread，理论上一定会调用super，而继承通过字节码改成ProxyThread，因为调用了super所以这里也能调用到
@@ -36,33 +35,14 @@ open class TBaseThread : Thread {
 
     @Synchronized
     override fun start() {
-        val callStack = getStackString()
         super.start()
 
-        // 有则更新没有则新增
-        val info = ThreadInfoManager.INSTANCE.getThreadInfoById(id)
-        info?.also {
-            it.id = id
-            it.name = name
-            it.state = state
-            if (it.callStack.isEmpty()) { // 如果来自线程池，callStack意义为任务添加栈，可能已经有值了，不能更新为start调用栈
-                it.callStack = callStack
-                it.callThreadId = currentThread().id
-            }
-        } ?: apply {
-            val newInfo = ThreadInfo()
-            newInfo.id = id
-            newInfo.name = name
-            newInfo.callStack = callStack
-            newInfo.callThreadId = currentThread().id
-            newInfo.state = state
-            newInfo.startTime = SystemClock.elapsedRealtime()
-            ThreadInfoManager.INSTANCE.putThreadInfo(id, newInfo)
-        }
+        ThreadInfoManager.INSTANCE.recordThread(this, ThreadType.NORMAL, TrackerUtils.getStackString())
     }
 
     override fun run() {
         super.run()
-        ThreadInfoManager.INSTANCE.removeThreadInfo(id)
+
+        ThreadInfoManager.INSTANCE.recordThreadEnd(this, ThreadType.NORMAL)
     }
 }
